@@ -2,17 +2,11 @@ services:
   - type: web
     name: passpad
     env: node
-    plan: starter
+    plan: free
     buildCommand: npm install
     startCommand: npm start
     envVars:
       - key: APP_SECRET
         generateValue: true
-      - key: DATA_DIR
-        value: /opt/render/project/src/data
       - key: MAX_UPLOAD_BYTES
         value: 26214400
-    disk:
-      name: passpad-data
-      mountPath: /opt/render/project/src/data
-      sizeGB: 1
