@@ -1,0 +1,248 @@
+const gate = document.querySelector("#gate");
+const workspace = document.querySelector("#workspace");
+const openForm = document.querySelector("#openForm");
+const passwordInput = document.querySelector("#password");
+const textArea = document.querySelector("#text");
+const statusEl = document.querySelector("#status");
+const saveState = document.querySelector("#saveState");
+const fileInput = document.querySelector("#fileInput");
+const uploadsEl = document.querySelector("#uploads");
+const fileCount = document.querySelector("#fileCount");
+const copyLink = document.querySelector("#copyLink");
+const lockPad = document.querySelector("#lockPad");
+const fileTemplate = document.querySelector("#fileTemplate");
+
+const maxUploadBytes = 25 * 1024 * 1024;
+let password = "";
+let currentRoom = null;
+let saveTimer = null;
+let pollTimer = null;
+let lastTextSent = "";
+let dirtyLocally = false;
+
+function setStatus(message) {
+  statusEl.textContent = message;
+}
+
+function formatBytes(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function isImage(file) {
+  return file.type?.startsWith("image/");
+}
+
+function apiHeaders() {
+  return { "x-room-password": password };
+}
+
+async function request(path, options = {}) {
+  const response = await fetch(path, {
+    ...options,
+    headers: {
+      ...apiHeaders(),
+      ...(options.headers || {})
+    }
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.error || "Request failed.");
+  }
+  return payload;
+}
+
+function renderFiles(files) {
+  uploadsEl.innerHTML = "";
+  fileCount.textContent = `${files.length} ${files.length === 1 ? "file" : "files"}`;
+
+  if (!files.length) {
+    const empty = document.createElement("p");
+    empty.className = "empty";
+    empty.textContent = "No files uploaded yet.";
+    uploadsEl.append(empty);
+    return;
+  }
+
+  for (const file of files) {
+    const item = fileTemplate.content.firstElementChild.cloneNode(true);
+    const preview = item.querySelector(".preview");
+    const name = item.querySelector(".file-name");
+    const info = item.querySelector(".file-info");
+    const deleteButton = item.querySelector(".delete");
+
+    preview.href = file.url;
+    name.href = file.url;
+    name.textContent = file.name;
+    info.textContent = `${formatBytes(file.size)} • ${new Date(file.uploadedAt).toLocaleString()}`;
+
+    if (isImage(file)) {
+      const img = document.createElement("img");
+      img.src = file.url;
+      img.alt = file.name;
+      preview.append(img);
+    } else {
+      preview.textContent = file.name.split(".").pop()?.slice(0, 4).toUpperCase() || "FILE";
+    }
+
+    deleteButton.addEventListener("click", async () => {
+      if (!confirm(`Delete ${file.name}?`)) return;
+      deleteButton.disabled = true;
+      try {
+        await request(`/api/room/files/${file.id}`, { method: "DELETE" });
+        await loadRoom({ quiet: true });
+      } catch (error) {
+        alert(error.message);
+      } finally {
+        deleteButton.disabled = false;
+      }
+    });
+
+    uploadsEl.append(item);
+  }
+}
+
+async function loadRoom({ quiet = false } = {}) {
+  if (!quiet) setStatus("Loading...");
+  const room = await request("/api/room");
+  currentRoom = room;
+  if (!dirtyLocally && textArea.value !== room.text) {
+    textArea.value = room.text;
+    lastTextSent = room.text;
+  }
+  renderFiles(room.files);
+  setStatus(`Updated ${new Date(room.updatedAt).toLocaleTimeString()}`);
+}
+
+async function saveTextNow() {
+  const text = textArea.value;
+  if (text === lastTextSent) {
+    saveState.textContent = "Saved";
+    dirtyLocally = false;
+    return;
+  }
+
+  saveState.textContent = "Saving...";
+  await request("/api/room/text", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text })
+  });
+  lastTextSent = text;
+  dirtyLocally = false;
+  saveState.textContent = "Saved";
+}
+
+function scheduleSave() {
+  dirtyLocally = true;
+  saveState.textContent = "Unsaved";
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(async () => {
+    try {
+      await saveTextNow();
+    } catch (error) {
+      saveState.textContent = "Save failed";
+      setStatus(error.message);
+    }
+  }, 700);
+}
+
+function startPolling() {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    if (dirtyLocally) return;
+    try {
+      await loadRoom({ quiet: true });
+    } catch (error) {
+      setStatus(error.message);
+    }
+  }, 4000);
+}
+
+async function openPad(nextPassword) {
+  password = nextPassword.trim();
+  if (password.length < 3) {
+    throw new Error("Use at least 3 characters.");
+  }
+  window.localStorage.setItem("passpad-password", password);
+  gate.classList.add("hidden");
+  workspace.classList.remove("hidden");
+  await loadRoom();
+  startPolling();
+  textArea.focus();
+}
+
+openForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = openForm.querySelector("button");
+  button.disabled = true;
+  try {
+    await openPad(passwordInput.value);
+  } catch (error) {
+    alert(error.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+textArea.addEventListener("input", scheduleSave);
+
+fileInput.addEventListener("change", async () => {
+  const file = fileInput.files?.[0];
+  if (!file) return;
+  if (file.type.startsWith("video/")) {
+    alert("Videos are not allowed.");
+    fileInput.value = "";
+    return;
+  }
+  if (file.size > maxUploadBytes) {
+    alert("File must be 25 MB or smaller.");
+    fileInput.value = "";
+    return;
+  }
+
+  const formData = new FormData();
+  formData.append("file", file);
+  setStatus("Uploading...");
+  fileInput.disabled = true;
+  try {
+    await request("/api/room/upload", {
+      method: "POST",
+      body: formData
+    });
+    await loadRoom({ quiet: true });
+  } catch (error) {
+    alert(error.message);
+    setStatus(error.message);
+  } finally {
+    fileInput.disabled = false;
+    fileInput.value = "";
+  }
+});
+
+copyLink.addEventListener("click", async () => {
+  await navigator.clipboard.writeText(window.location.origin);
+  copyLink.textContent = "Copied";
+  setTimeout(() => {
+    copyLink.textContent = "Copy link";
+  }, 1200);
+});
+
+lockPad.addEventListener("click", () => {
+  clearInterval(pollTimer);
+  password = "";
+  currentRoom = null;
+  textArea.value = "";
+  uploadsEl.innerHTML = "";
+  window.localStorage.removeItem("passpad-password");
+  workspace.classList.add("hidden");
+  gate.classList.remove("hidden");
+  passwordInput.value = "";
+  passwordInput.focus();
+});
+
+const remembered = window.localStorage.getItem("passpad-password");
+if (remembered) {
+  passwordInput.value = remembered;
+}

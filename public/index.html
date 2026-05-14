@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>PassPad</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="gate" id="gate">
+        <div class="brand">
+          <span class="mark">P</span>
+          <div>
+            <h1>PassPad</h1>
+            <p>Open the same text, images, and files with one shared password.</p>
+          </div>
+        </div>
+        <form class="open-form" id="openForm">
+          <label for="password">Shared password</label>
+          <div class="password-row">
+            <input id="password" name="password" type="password" minlength="3" autocomplete="off" placeholder="example: physics-demo-2026" required>
+            <button type="submit">Open</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="workspace hidden" id="workspace" aria-live="polite">
+        <header class="topbar">
+          <div class="brand compact">
+            <span class="mark">P</span>
+            <div>
+              <h1>PassPad</h1>
+              <p id="status">Connected</p>
+            </div>
+          </div>
+          <div class="actions">
+            <button class="secondary" id="copyLink" type="button">Copy link</button>
+            <button class="secondary" id="lockPad" type="button">Lock</button>
+          </div>
+        </header>
+
+        <div class="grid">
+          <section class="editor-panel">
+            <div class="panel-head">
+              <h2>Text</h2>
+              <span id="saveState">Saved</span>
+            </div>
+            <textarea id="text" spellcheck="true" placeholder="Paste notes, links, class points, code, or presentation text here."></textarea>
+          </section>
+
+          <aside class="files-panel">
+            <div class="panel-head">
+              <h2>Uploads</h2>
+              <span id="fileCount">0 files</span>
+            </div>
+            <label class="upload-box" for="fileInput">
+              <input id="fileInput" type="file">
+              <strong>Choose a file</strong>
+              <span>Images, PDFs, documents, sheets, ZIP, and text files. No videos.</span>
+            </label>
+            <div class="uploads" id="uploads"></div>
+          </aside>
+        </div>
+      </section>
+    </main>
+
+    <template id="fileTemplate">
+      <article class="upload-item">
+        <a class="preview" target="_blank" rel="noreferrer"></a>
+        <div class="file-meta">
+          <a class="file-name" target="_blank" rel="noreferrer"></a>
+          <span class="file-info"></span>
+        </div>
+        <button class="delete" type="button" aria-label="Delete file">Delete</button>
+      </article>
+    </template>
+
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

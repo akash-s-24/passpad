@@ -1,0 +1,14 @@
+{
+  "name": "passpad",
+  "version": "1.0.0",
+  "description": "No-login shared text and file pad opened with a shared password.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
