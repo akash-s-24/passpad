@@ -9,7 +9,7 @@ PassPad is a no-login shared workspace inspired by simple online pads. Everyone 
 - Shared page opened with a password, no account required
 - Text notes with auto-save
 - Image preview uploads
-- File uploads for PDF, Office files, text, CSV, ZIP, and common images
+- Multi-file uploads for PDF, Office files, text, CSV, ZIP, and common images
 - Video uploads blocked
 - Delete uploaded files
 - Passwords are not stored directly; the server derives a room id from the password and `APP_SECRET`
@@ -33,11 +33,13 @@ PORT=3000
 APP_SECRET=change-this-long-random-secret
 DATA_DIR=/path/to/persistent/data
 MAX_UPLOAD_BYTES=26214400
+MAX_BATCH_UPLOAD_BYTES=104857600
+MAX_UPLOAD_FILES=10
 ```
 
 ## Deployment Notes
 
-This app stores text and uploads on disk. For real use, deploy it to a service that supports persistent disk storage, such as Render, Railway, Fly.io, or a VPS. On Render, persistent disks require a paid web service instance, so `render.yaml` uses the Starter plan.
+This app stores text and uploads on disk. For real use, deploy it to a service that supports persistent disk storage, such as Render, Railway, Fly.io, or a VPS. The included `render.yaml` uses Render Free for an easy preview; upgrade to a paid service with a persistent disk when uploaded files must survive restarts.
 
 Vercel serverless deployments are not recommended for this version because uploaded files and room data will not persist reliably between function invocations. To use Vercel properly, swap the storage layer for Supabase, S3, Cloudflare R2, or Vercel Blob.
 

@@ -13,6 +13,8 @@ const lockPad = document.querySelector("#lockPad");
 const fileTemplate = document.querySelector("#fileTemplate");
 
 const maxUploadBytes = 25 * 1024 * 1024;
+const maxBatchUploadBytes = 100 * 1024 * 1024;
+const maxUploadFiles = 10;
 let password = "";
 let currentRoom = null;
 let saveTimer = null;
@@ -32,6 +34,33 @@ function formatBytes(bytes) {
 
 function isImage(file) {
   return file.type?.startsWith("image/");
+}
+
+function pluralize(count, singular, plural = `${singular}s`) {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+function validateUploadFiles(files) {
+  const errors = [];
+  const totalSize = files.reduce((sum, file) => sum + file.size, 0);
+
+  if (files.length > maxUploadFiles) {
+    errors.push(`Choose ${maxUploadFiles} files or fewer at once.`);
+  }
+  if (totalSize > maxBatchUploadBytes) {
+    errors.push(`The selected files must be ${formatBytes(maxBatchUploadBytes)} or smaller together.`);
+  }
+
+  for (const file of files) {
+    if (file.type.startsWith("video/")) {
+      errors.push(`${file.name} is a video, which is not allowed.`);
+    }
+    if (file.size > maxUploadBytes) {
+      errors.push(`${file.name} must be ${formatBytes(maxUploadBytes)} or smaller.`);
+    }
+  }
+
+  return errors;
 }
 
 function apiHeaders() {
@@ -189,29 +218,30 @@ openForm.addEventListener("submit", async (event) => {
 textArea.addEventListener("input", scheduleSave);
 
 fileInput.addEventListener("change", async () => {
-  const file = fileInput.files?.[0];
-  if (!file) return;
-  if (file.type.startsWith("video/")) {
-    alert("Videos are not allowed.");
-    fileInput.value = "";
-    return;
-  }
-  if (file.size > maxUploadBytes) {
-    alert("File must be 25 MB or smaller.");
+  const files = Array.from(fileInput.files || []);
+  if (!files.length) return;
+
+  const errors = validateUploadFiles(files);
+  if (errors.length) {
+    alert(errors.join("\n"));
     fileInput.value = "";
     return;
   }
 
   const formData = new FormData();
-  formData.append("file", file);
-  setStatus("Uploading...");
+  for (const file of files) {
+    formData.append("file", file);
+  }
+
+  setStatus(`Uploading ${pluralize(files.length, "file")}...`);
   fileInput.disabled = true;
   try {
-    await request("/api/room/upload", {
+    const result = await request("/api/room/upload", {
       method: "POST",
       body: formData
     });
     await loadRoom({ quiet: true });
+    setStatus(`Uploaded ${pluralize(result.files.length, "file")}`);
   } catch (error) {
     alert(error.message);
     setStatus(error.message);

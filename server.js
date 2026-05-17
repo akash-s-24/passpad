@@ -21,6 +21,8 @@ const ROOMS_DIR = path.join(DATA_DIR, "rooms");
 const UPLOADS_DIR = path.join(DATA_DIR, "uploads");
 const PUBLIC_DIR = path.join(__dirname, "public");
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 25 * 1024 * 1024);
+const MAX_BATCH_UPLOAD_BYTES = Number(process.env.MAX_BATCH_UPLOAD_BYTES || 100 * 1024 * 1024);
+const MAX_UPLOAD_FILES = Number(process.env.MAX_UPLOAD_FILES || 10);
 
 const mimeTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -289,32 +291,47 @@ async function handleApi(req, res) {
   if (url.pathname === "/api/room/upload" && req.method === "POST") {
     const roomId = requireRoom(req);
     if (!roomId) return sendError(res, 401, "Enter a password with at least 3 characters.");
-    const buffer = await readRequestBody(req, MAX_UPLOAD_BYTES + 1024 * 256);
-    const part = parseMultipart(buffer, req.headers["content-type"]).find((item) => item.name === "file");
-    if (!part || !part.filename || !part.data.length) return sendError(res, 400, "Choose a file to upload.");
-    if (part.data.length > MAX_UPLOAD_BYTES) return sendError(res, 413, "File is too large.");
-    if (!isAllowedFile(part.filename, part.type)) {
-      return sendError(res, 415, "This file type is not allowed.");
+    const buffer = await readRequestBody(req, MAX_BATCH_UPLOAD_BYTES + 1024 * 256);
+    const parts = parseMultipart(buffer, req.headers["content-type"]).filter(
+      (item) => item.name === "file" && item.filename && item.data.length
+    );
+    if (!parts.length) return sendError(res, 400, "Choose at least one file to upload.");
+    if (parts.length > MAX_UPLOAD_FILES) {
+      return sendError(res, 413, `Upload ${MAX_UPLOAD_FILES} files or fewer at once.`);
+    }
+
+    for (const part of parts) {
+      if (part.data.length > MAX_UPLOAD_BYTES) {
+        return sendError(res, 413, `${safeFileName(part.filename)} is too large.`);
+      }
+      if (!isAllowedFile(part.filename, part.type)) {
+        return sendError(res, 415, `${safeFileName(part.filename)} is not an allowed file type.`);
+      }
     }
 
     const room = await readRoom(roomId);
-    const id = randomUUID();
-    const cleanName = safeFileName(part.filename);
-    const storedName = `${id}${path.extname(cleanName).toLowerCase()}`;
     await mkdir(uploadDir(roomId), { recursive: true });
-    await writeFile(path.join(uploadDir(roomId), storedName), part.data);
-    const file = {
-      id,
-      name: cleanName,
-      storedName,
-      type: part.type,
-      size: part.data.length,
-      url: `/uploads/${roomId}/${id}`,
-      uploadedAt: new Date().toISOString()
-    };
-    room.files.unshift(file);
+
+    const files = [];
+    for (const part of parts) {
+      const id = randomUUID();
+      const cleanName = safeFileName(part.filename);
+      const storedName = `${id}${path.extname(cleanName).toLowerCase()}`;
+      await writeFile(path.join(uploadDir(roomId), storedName), part.data);
+      files.push({
+        id,
+        name: cleanName,
+        storedName,
+        type: part.type,
+        size: part.data.length,
+        url: `/uploads/${roomId}/${id}`,
+        uploadedAt: new Date().toISOString()
+      });
+    }
+
+    room.files.unshift(...files);
     await writeRoom(room);
-    sendJson(res, 201, { file, updatedAt: room.updatedAt });
+    sendJson(res, 201, { files, updatedAt: room.updatedAt });
     return;
   }
 
