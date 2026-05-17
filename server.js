@@ -48,24 +48,23 @@ const mimeTypes = new Map([
   [".zip", "application/zip"]
 ]);
 
-const allowedExtensions = new Set([
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".gif",
-  ".webp",
-  ".svg",
-  ".pdf",
-  ".txt",
-  ".md",
-  ".doc",
-  ".docx",
-  ".ppt",
-  ".pptx",
-  ".xls",
-  ".xlsx",
-  ".zip",
-  ".csv"
+const blockedExtensions = new Set([
+  ".app",
+  ".apk",
+  ".bat",
+  ".bin",
+  ".cmd",
+  ".com",
+  ".deb",
+  ".dmg",
+  ".exe",
+  ".ipa",
+  ".jar",
+  ".msi",
+  ".pkg",
+  ".ps1",
+  ".scr",
+  ".sh"
 ]);
 
 function sendJson(res, statusCode, payload) {
@@ -113,8 +112,8 @@ function safeFileName(name) {
 
 function isAllowedFile(name, type) {
   const ext = path.extname(name).toLowerCase();
-  if (!allowedExtensions.has(ext)) return false;
   if (type && type.toLowerCase().startsWith("video/")) return false;
+  if (blockedExtensions.has(ext)) return false;
   return true;
 }
 

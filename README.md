@@ -9,7 +9,7 @@ PassPad is a no-login shared workspace inspired by simple online pads. Everyone 
 - Shared page opened with a password, no account required
 - Text notes with auto-save
 - Image preview uploads
-- Multi-file uploads for PDF, Office files, text, CSV, ZIP, and common images
+- Multi-file uploads for images, PDFs, documents, ZIP, text/data files, and most non-video file types
 - Video uploads blocked
 - Delete uploaded files
 - Passwords are not stored directly; the server derives a room id from the password and `APP_SECRET`

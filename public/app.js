@@ -15,6 +15,24 @@ const fileTemplate = document.querySelector("#fileTemplate");
 const maxUploadBytes = 25 * 1024 * 1024;
 const maxBatchUploadBytes = 100 * 1024 * 1024;
 const maxUploadFiles = 10;
+const blockedUploadExtensions = new Set([
+  ".app",
+  ".apk",
+  ".bat",
+  ".bin",
+  ".cmd",
+  ".com",
+  ".deb",
+  ".dmg",
+  ".exe",
+  ".ipa",
+  ".jar",
+  ".msi",
+  ".pkg",
+  ".ps1",
+  ".scr",
+  ".sh"
+]);
 let password = "";
 let currentRoom = null;
 let saveTimer = null;
@@ -36,6 +54,11 @@ function isImage(file) {
   return file.type?.startsWith("image/");
 }
 
+function fileExtension(name) {
+  const index = name.lastIndexOf(".");
+  return index >= 0 ? name.slice(index).toLowerCase() : "";
+}
+
 function pluralize(count, singular, plural = `${singular}s`) {
   return `${count} ${count === 1 ? singular : plural}`;
 }
@@ -54,6 +77,9 @@ function validateUploadFiles(files) {
   for (const file of files) {
     if (file.type.startsWith("video/")) {
       errors.push(`${file.name} is a video, which is not allowed.`);
+    }
+    if (blockedUploadExtensions.has(fileExtension(file.name))) {
+      errors.push(`${file.name} is an app or script file, which is not allowed.`);
     }
     if (file.size > maxUploadBytes) {
       errors.push(`${file.name} must be ${formatBytes(maxUploadBytes)} or smaller.`);
@@ -228,20 +254,30 @@ fileInput.addEventListener("change", async () => {
     return;
   }
 
-  const formData = new FormData();
-  for (const file of files) {
-    formData.append("file", file);
-  }
-
   setStatus(`Uploading ${pluralize(files.length, "file")}...`);
   fileInput.disabled = true;
   try {
-    const result = await request("/api/room/upload", {
-      method: "POST",
-      body: formData
-    });
+    let uploadedCount = 0;
+    const failures = [];
+    for (const [index, file] of files.entries()) {
+      const fileFormData = new FormData();
+      fileFormData.append("file", file);
+      setStatus(`Uploading ${index + 1} of ${files.length}: ${file.name}`);
+      try {
+        const result = await request("/api/room/upload", {
+          method: "POST",
+          body: fileFormData
+        });
+        uploadedCount += result.files?.length || (result.file ? 1 : 0);
+      } catch (error) {
+        failures.push(`${file.name}: ${error.message}`);
+      }
+    }
     await loadRoom({ quiet: true });
-    setStatus(`Uploaded ${pluralize(result.files.length, "file")}`);
+    if (failures.length) {
+      alert(`Uploaded ${pluralize(uploadedCount, "file")}.\n\nCould not upload:\n${failures.join("\n")}`);
+    }
+    setStatus(failures.length ? `Uploaded ${uploadedCount}, failed ${failures.length}` : `Uploaded ${pluralize(uploadedCount, "file")}`);
   } catch (error) {
     alert(error.message);
     setStatus(error.message);
