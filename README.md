@@ -8,10 +8,18 @@ PassPad is a no-login shared workspace inspired by simple online pads. Everyone 
 
 - Shared page opened with a password, no account required
 - Text notes with auto-save
-- Image preview uploads
-- Multi-file uploads for images, PDFs, documents, ZIP, text/data files, and most non-video file types
+- Drag-and-drop, multi-file, and pasted screenshot uploads
+- Upload progress for each file
+- File previews for images, PDFs, and text/data files
+- Download all text and files as a ZIP
+- Rename and delete uploaded files
+- Search and sort uploaded files
+- Optional edit password for read-only sharing
+- Auto-expiring pads
+- Pad storage meter and storage limit
+- Delete entire pad
+- Dark mode and responsive mobile layout
 - Video uploads blocked
-- Delete uploaded files
 - Passwords are not stored directly; the server derives a room id from the password and `APP_SECRET`
 
 ## Run Locally
@@ -35,6 +43,7 @@ DATA_DIR=/path/to/persistent/data
 MAX_UPLOAD_BYTES=26214400
 MAX_BATCH_UPLOAD_BYTES=104857600
 MAX_UPLOAD_FILES=10
+MAX_ROOM_BYTES=524288000
 ```
 
 ## Deployment Notes

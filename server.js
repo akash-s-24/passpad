@@ -4,7 +4,6 @@ import { createReadStream } from "node:fs";
 import {
   mkdir,
   readFile,
-  readdir,
   rename,
   rm,
   stat,
@@ -23,6 +22,7 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const MAX_UPLOAD_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 25 * 1024 * 1024);
 const MAX_BATCH_UPLOAD_BYTES = Number(process.env.MAX_BATCH_UPLOAD_BYTES || 100 * 1024 * 1024);
 const MAX_UPLOAD_FILES = Number(process.env.MAX_UPLOAD_FILES || 10);
+const MAX_ROOM_BYTES = Number(process.env.MAX_ROOM_BYTES || 500 * 1024 * 1024);
 
 const mimeTypes = new Map([
   [".html", "text/html; charset=utf-8"],
@@ -96,6 +96,17 @@ function requireRoom(req) {
   return roomIdForPassword(password);
 }
 
+function editPasswordHash(roomId, password) {
+  return createHash("sha256")
+    .update(`${APP_SECRET}:edit:${roomId}:${password.trim()}`)
+    .digest("hex");
+}
+
+function editPasswordFromRequest(req) {
+  const header = req.headers["x-edit-password"];
+  return Array.isArray(header) ? header[0] : header;
+}
+
 function roomPath(roomId) {
   return path.join(ROOMS_DIR, `${roomId}.json`);
 }
@@ -110,6 +121,13 @@ function safeFileName(name) {
   return `${base || "file"}${ext}`;
 }
 
+function safeRenamedFileName(name, fallbackName) {
+  const fallbackExt = path.extname(fallbackName).toLowerCase();
+  const requestedExt = path.extname(name).toLowerCase();
+  const clean = safeFileName(requestedExt ? name : `${name}${fallbackExt}`);
+  return clean || fallbackName;
+}
+
 function isAllowedFile(name, type) {
   const ext = path.extname(name).toLowerCase();
   if (type && type.toLowerCase().startsWith("video/")) return false;
@@ -122,20 +140,48 @@ async function ensureStorage() {
   await mkdir(UPLOADS_DIR, { recursive: true });
 }
 
+function emptyRoom(roomId) {
+  return {
+    id: roomId,
+    text: "",
+    files: [],
+    editPasswordHash: "",
+    expiresAt: "",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+}
+
+function normalizeRoom(room) {
+  return {
+    ...emptyRoom(room.id),
+    ...room,
+    files: Array.isArray(room.files) ? room.files : []
+  };
+}
+
+async function deleteRoom(roomId) {
+  await rm(roomPath(roomId), { force: true });
+  await rm(uploadDir(roomId), { recursive: true, force: true });
+}
+
+function isExpired(room) {
+  return Boolean(room.expiresAt && new Date(room.expiresAt).getTime() <= Date.now());
+}
+
 async function readRoom(roomId) {
   await ensureStorage();
   try {
     const raw = await readFile(roomPath(roomId), "utf8");
-    return JSON.parse(raw);
+    const room = normalizeRoom(JSON.parse(raw));
+    if (isExpired(room)) {
+      await deleteRoom(roomId);
+      return emptyRoom(roomId);
+    }
+    return room;
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
-    return {
-      id: roomId,
-      text: "",
-      files: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+    return emptyRoom(roomId);
   }
 }
 
@@ -146,6 +192,32 @@ async function writeRoom(room) {
   const temp = `${target}.${randomUUID()}.tmp`;
   await writeFile(temp, JSON.stringify(room, null, 2));
   await rename(temp, target);
+}
+
+function roomStorageUsed(room) {
+  return room.files.reduce((sum, file) => sum + Number(file.size || 0), Buffer.byteLength(room.text || "", "utf8"));
+}
+
+function canEditRoom(req, room) {
+  if (!room.editPasswordHash) return true;
+  const editPassword = editPasswordFromRequest(req);
+  return Boolean(editPassword && editPasswordHash(room.id, editPassword) === room.editPasswordHash);
+}
+
+function roomPayload(room, req) {
+  return {
+    id: room.id,
+    text: room.text,
+    files: room.files,
+    updatedAt: room.updatedAt,
+    expiresAt: room.expiresAt,
+    editLocked: Boolean(room.editPasswordHash),
+    canEdit: canEditRoom(req, room),
+    storage: {
+      used: roomStorageUsed(room),
+      max: MAX_ROOM_BYTES
+    }
+  };
 }
 
 async function readRequestBody(req, maxBytes = 1024 * 1024) {
@@ -257,6 +329,119 @@ async function serveUploadedFile(req, res, roomId, fileId) {
   }
 }
 
+const crcTable = new Uint32Array(256).map((_, index) => {
+  let value = index;
+  for (let bit = 0; bit < 8; bit += 1) {
+    value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+  }
+  return value >>> 0;
+});
+
+function crc32(buffer) {
+  let crc = 0xffffffff;
+  for (const byte of buffer) {
+    crc = crcTable[(crc ^ byte) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function zipDateParts(date = new Date()) {
+  const dosTime = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
+  const dosDate = ((date.getFullYear() - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
+  return { dosTime, dosDate };
+}
+
+function buildZip(entries) {
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+
+  for (const entry of entries) {
+    const name = Buffer.from(entry.name, "utf8");
+    const data = entry.data;
+    const checksum = crc32(data);
+    const { dosTime, dosDate } = zipDateParts(entry.date);
+
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0x0800, 6);
+    localHeader.writeUInt16LE(0, 8);
+    localHeader.writeUInt16LE(dosTime, 10);
+    localHeader.writeUInt16LE(dosDate, 12);
+    localHeader.writeUInt32LE(checksum, 14);
+    localHeader.writeUInt32LE(data.length, 18);
+    localHeader.writeUInt32LE(data.length, 22);
+    localHeader.writeUInt16LE(name.length, 26);
+
+    localParts.push(localHeader, name, data);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0x0800, 8);
+    centralHeader.writeUInt16LE(0, 10);
+    centralHeader.writeUInt16LE(dosTime, 12);
+    centralHeader.writeUInt16LE(dosDate, 14);
+    centralHeader.writeUInt32LE(checksum, 16);
+    centralHeader.writeUInt32LE(data.length, 20);
+    centralHeader.writeUInt32LE(data.length, 24);
+    centralHeader.writeUInt16LE(name.length, 28);
+    centralHeader.writeUInt32LE(offset, 42);
+    centralParts.push(centralHeader, name);
+
+    offset += localHeader.length + name.length + data.length;
+  }
+
+  const centralSize = centralParts.reduce((sum, part) => sum + part.length, 0);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(centralSize, 12);
+  end.writeUInt32LE(offset, 16);
+
+  return Buffer.concat([...localParts, ...centralParts, end]);
+}
+
+async function serveRoomZip(req, res, roomId) {
+  const room = await readRoom(roomId);
+  const entries = [];
+  if (room.text.trim()) {
+    entries.push({
+      name: "passpad-notes.txt",
+      data: Buffer.from(room.text, "utf8"),
+      date: new Date(room.updatedAt)
+    });
+  }
+
+  for (const file of room.files) {
+    try {
+      entries.push({
+        name: file.name,
+        data: await readFile(path.join(uploadDir(roomId), file.storedName)),
+        date: new Date(file.uploadedAt)
+      });
+    } catch {
+      // Skip missing files so one broken upload record does not block download-all.
+    }
+  }
+
+  if (!entries.length) {
+    sendError(res, 404, "There is nothing to download yet.");
+    return;
+  }
+
+  const zip = buildZip(entries);
+  res.writeHead(200, {
+    "content-type": "application/zip",
+    "content-length": zip.length,
+    "content-disposition": 'attachment; filename="passpad-download.zip"'
+  });
+  res.end(zip);
+}
+
 async function handleApi(req, res) {
   const url = new URL(req.url, "http://localhost");
 
@@ -264,12 +449,7 @@ async function handleApi(req, res) {
     const roomId = requireRoom(req);
     if (!roomId) return sendError(res, 401, "Enter a password with at least 3 characters.");
     const room = await readRoom(roomId);
-    sendJson(res, 200, {
-      id: room.id,
-      text: room.text,
-      files: room.files,
-      updatedAt: room.updatedAt
-    });
+    sendJson(res, 200, roomPayload(room, req));
     return;
   }
 
@@ -281,9 +461,49 @@ async function handleApi(req, res) {
     if (typeof payload.text !== "string") return sendError(res, 400, "Text is required.");
     if (Buffer.byteLength(payload.text, "utf8") > 500 * 1024) return sendError(res, 413, "Text is too large.");
     const room = await readRoom(roomId);
+    if (!canEditRoom(req, room)) return sendError(res, 403, "Enter the edit password to change this pad.");
     room.text = payload.text;
     await writeRoom(room);
     sendJson(res, 200, { ok: true, updatedAt: room.updatedAt });
+    return;
+  }
+
+  if (url.pathname === "/api/room/settings" && req.method === "PUT") {
+    const roomId = requireRoom(req);
+    if (!roomId) return sendError(res, 401, "Enter a password with at least 3 characters.");
+    const room = await readRoom(roomId);
+    if (!canEditRoom(req, room)) return sendError(res, 403, "Enter the edit password to change settings.");
+    const body = await readRequestBody(req);
+    const payload = JSON.parse(body.toString("utf8") || "{}");
+
+    if (Object.hasOwn(payload, "editPassword")) {
+      const editPassword = String(payload.editPassword || "").trim();
+      room.editPasswordHash = editPassword ? editPasswordHash(room.id, editPassword) : "";
+    }
+
+    if (Object.hasOwn(payload, "expiresIn")) {
+      const expiresIn = String(payload.expiresIn || "never");
+      const expiryMap = {
+        "1h": 60 * 60 * 1000,
+        "1d": 24 * 60 * 60 * 1000,
+        "7d": 7 * 24 * 60 * 60 * 1000,
+        "30d": 30 * 24 * 60 * 60 * 1000
+      };
+      room.expiresAt = expiryMap[expiresIn] ? new Date(Date.now() + expiryMap[expiresIn]).toISOString() : "";
+    }
+
+    await writeRoom(room);
+    sendJson(res, 200, roomPayload(room, req));
+    return;
+  }
+
+  if (url.pathname === "/api/room" && req.method === "DELETE") {
+    const roomId = requireRoom(req);
+    if (!roomId) return sendError(res, 401, "Enter a password with at least 3 characters.");
+    const room = await readRoom(roomId);
+    if (!canEditRoom(req, room)) return sendError(res, 403, "Enter the edit password to delete this pad.");
+    await deleteRoom(roomId);
+    sendJson(res, 200, { ok: true });
     return;
   }
 
@@ -309,6 +529,11 @@ async function handleApi(req, res) {
     }
 
     const room = await readRoom(roomId);
+    if (!canEditRoom(req, room)) return sendError(res, 403, "Enter the edit password to upload files.");
+    const incomingBytes = parts.reduce((sum, part) => sum + part.data.length, 0);
+    if (roomStorageUsed(room) + incomingBytes > MAX_ROOM_BYTES) {
+      return sendError(res, 413, "This pad has reached its storage limit.");
+    }
     await mkdir(uploadDir(roomId), { recursive: true });
 
     const files = [];
@@ -339,12 +564,31 @@ async function handleApi(req, res) {
     const roomId = requireRoom(req);
     if (!roomId) return sendError(res, 401, "Enter a password with at least 3 characters.");
     const room = await readRoom(roomId);
+    if (!canEditRoom(req, room)) return sendError(res, 403, "Enter the edit password to delete files.");
     const file = room.files.find((item) => item.id === fileDeleteMatch[1]);
     if (!file) return sendError(res, 404, "File not found.");
     room.files = room.files.filter((item) => item.id !== file.id);
     await rm(path.join(uploadDir(roomId), file.storedName), { force: true });
     await writeRoom(room);
     sendJson(res, 200, { ok: true, updatedAt: room.updatedAt });
+    return;
+  }
+
+  const fileRenameMatch = /^\/api\/room\/files\/([a-f0-9-]+)$/.exec(url.pathname);
+  if (fileRenameMatch && req.method === "PATCH") {
+    const roomId = requireRoom(req);
+    if (!roomId) return sendError(res, 401, "Enter a password with at least 3 characters.");
+    const room = await readRoom(roomId);
+    if (!canEditRoom(req, room)) return sendError(res, 403, "Enter the edit password to rename files.");
+    const body = await readRequestBody(req);
+    const payload = JSON.parse(body.toString("utf8") || "{}");
+    const file = room.files.find((item) => item.id === fileRenameMatch[1]);
+    if (!file) return sendError(res, 404, "File not found.");
+    const newName = safeRenamedFileName(String(payload.name || ""), file.name);
+    if (!isAllowedFile(newName, file.type)) return sendError(res, 415, "That file name is not allowed.");
+    file.name = newName;
+    await writeRoom(room);
+    sendJson(res, 200, { file, updatedAt: room.updatedAt });
     return;
   }
 
@@ -363,6 +607,12 @@ async function route(req, res) {
     const uploadMatch = /^\/uploads\/([a-f0-9]{32})\/([a-f0-9-]+)$/.exec(url.pathname);
     if (uploadMatch && req.method === "GET") {
       await serveUploadedFile(req, res, uploadMatch[1], uploadMatch[2]);
+      return;
+    }
+
+    const zipMatch = /^\/download\/([a-f0-9]{32})\.zip$/.exec(url.pathname);
+    if (zipMatch && req.method === "GET") {
+      await serveRoomZip(req, res, zipMatch[1]);
       return;
     }
 

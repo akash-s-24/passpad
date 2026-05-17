@@ -35,7 +35,9 @@
             </div>
           </div>
           <div class="actions">
+            <button class="secondary" id="themeToggle" type="button">Dark</button>
             <button class="secondary" id="copyLink" type="button">Copy link</button>
+            <button class="secondary" id="downloadAll" type="button">Download all</button>
             <button class="secondary" id="lockPad" type="button">Lock</button>
           </div>
         </header>
@@ -54,12 +56,62 @@
               <h2>Uploads</h2>
               <span id="fileCount">0 files</span>
             </div>
-            <label class="upload-box" for="fileInput">
+            <div class="toolbar">
+              <input id="fileSearch" type="search" placeholder="Search files">
+              <select id="fileSort" aria-label="Sort files">
+                <option value="newest">Newest</option>
+                <option value="oldest">Oldest</option>
+                <option value="name">Name</option>
+                <option value="size">Size</option>
+                <option value="type">Type</option>
+              </select>
+            </div>
+            <label class="upload-box" id="dropZone" for="fileInput">
               <input id="fileInput" type="file" multiple>
               <strong>Choose files</strong>
-              <span>Select up to 10 files at once. Images, PDFs, documents, ZIP, and text/data files work. No videos.</span>
+              <span>Click, drag files here, or paste screenshots. Up to 10 files at once. No videos.</span>
             </label>
+            <div class="progress hidden" id="uploadProgress">
+              <div class="progress-bar"><span id="progressFill"></span></div>
+              <span id="progressText">Ready</span>
+            </div>
             <div class="uploads" id="uploads"></div>
+
+            <section class="settings">
+              <h2>Pad Settings</h2>
+              <div class="setting-row">
+                <label for="editPassword">Edit password</label>
+                <div class="inline-form">
+                  <input id="editPassword" type="password" placeholder="Optional">
+                  <button id="saveEditPassword" type="button">Save</button>
+                </div>
+              </div>
+              <div class="setting-row hidden" id="unlockEditRow">
+                <label for="unlockEditPassword">Unlock editing</label>
+                <div class="inline-form">
+                  <input id="unlockEditPassword" type="password" placeholder="Edit password">
+                  <button id="unlockEdit" type="button">Unlock</button>
+                </div>
+              </div>
+              <div class="setting-row">
+                <label for="expiresIn">Auto expire</label>
+                <div class="inline-form">
+                  <select id="expiresIn">
+                    <option value="never">Never</option>
+                    <option value="1h">1 hour</option>
+                    <option value="1d">1 day</option>
+                    <option value="7d">7 days</option>
+                    <option value="30d">30 days</option>
+                  </select>
+                  <button id="saveExpiry" type="button">Apply</button>
+                </div>
+              </div>
+              <div class="storage">
+                <span id="storageText">0 MB used</span>
+                <div class="progress-bar"><span id="storageFill"></span></div>
+              </div>
+              <button class="danger wide" id="deletePad" type="button">Delete pad</button>
+            </section>
           </aside>
         </div>
       </section>
@@ -72,9 +124,21 @@
           <a class="file-name" target="_blank" rel="noreferrer"></a>
           <span class="file-info"></span>
         </div>
-        <button class="delete" type="button" aria-label="Delete file">Delete</button>
+        <div class="file-actions">
+          <button class="secondary preview-file" type="button">Preview</button>
+          <button class="secondary rename" type="button">Rename</button>
+          <button class="delete" type="button" aria-label="Delete file">Delete</button>
+        </div>
       </article>
     </template>
+
+    <dialog id="previewDialog">
+      <div class="dialog-head">
+        <h2 id="previewTitle">Preview</h2>
+        <button class="secondary" id="closePreview" type="button">Close</button>
+      </div>
+      <div class="preview-content" id="previewContent"></div>
+    </dialog>
 
     <script src="/app.js" type="module"></script>
   </body>
